@@ -1,0 +1,973 @@
+---
+title: "B cell modelling"
+output:
+  html_document:
+    df_print: paged
+---
+##Martinez model
+This is the first model by Martinez et al. displaying the interaction between Blimp1, Bcl6 and Irf4 and showing the effects of BCR and CD40 signalling.  
+![Could not display image](re.png)
+
+Equation 1: Blimp-1 expression
+
+$$
+  \frac{d[Blimp1]}{dt}=\mu_{blimp}+\sigma_{blimp}*\frac{k_{bcl}^2}{k_{bcl}^2+[Bcl6]^2}+\sigma_{blimp}*\frac{[Irf4]^2}{k_{irf}^2+[Irf4]^2} - \lambda_{blimp}*[Blimp1]
+$$
+Equation 2: Bcl6 expression
+$$
+  \frac{d[Bcl6]}{dt}=\mu_{bcl}+\sigma_{bcl}*\frac{k_{blimp}^2}{k_{blimp}^2+[Blimp1]^2}*\frac{k_{bcl}^2}{k_{bcl}^2+[Bcl6]^2}*\frac{k_{irf}^2}{k_{irf}^2+[Irf4]^2}-(\lambda_{bcl} + BCR)*[Bcl6]
+$$
+Equation 3: Irf4 expression
+$$
+  \frac{d[Irf4]}{dt}=\mu_{irf}+\sigma_{irf}*\frac{[Irf4]^2}{k_{irf}^2+[Irf4]^2}+CD40-\lambda_{irf}*[Irf4]
+$$
+
+```{r message=FALSE, warning=FALSE}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library('tidyr')
+library('directlabels')
+
+Martinez1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  BLIMP1 <- y[1]
+  BCL6 <- y[2]
+  IRF4 <- y[3]
+  
+  up <- parameters['up']    # passive transcription rate
+  ub <- parameters['ub']
+  ur <- parameters['ur']
+  
+  op <- parameters['op']    # max induced transcription rate
+  ob <- parameters['ob']
+  or <- parameters['or']
+  
+  kb <- parameters['kb']    # dissociation constant
+  kr <- parameters['kr']
+  kp <- parameters['kp']
+  
+  ep <- parameters['ep']    # rate of degradation
+  eb <- parameters['eb']
+  er <- parameters['er']
+  
+  CD40 <-2 * dnorm(t, 25, 2) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2))
+  BCR <- 20 * dnorm(t, 21, 2) * (kb ^ 2 / ( kb ^ 2 + BCL6 ^ 2))
+  
+  # calculate rate of change
+  dBLIMP1 <- up + op * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) + op * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - ep * BLIMP1
+  dBCL6 <- ub + ob * (kp ^ 2 / (kp ^ 2 + BLIMP1 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) * (kr ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - (eb + BCR) * BCL6
+  dIRF4 <- ur + or * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) + CD40 - er * IRF4
+  
+  # return rate of change
+  return(list(c(dBLIMP1, dBCL6, dIRF4)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  up = 10 ^ -6,
+  ub = 2,
+  ur = 0.1,
+  op = 9,
+  ob = 100,       #just some parameters, no bxiggie
+  or = 2.6,
+  kp = 1,
+  kb = 1,
+  kr = 1,
+  ep = 1,
+  eb = 1,
+  er = 1,
+  BCR = 0,
+  CD40 = 0
+)
+
+state <- c(BLIMP1 = 0.735, BCL6 = 4.7, IRF4 = 0.2) # starting states
+
+times <- seq(0, 50, by = 0.01)
+
+result <- ode(y=state, times = times, func = Martinez1, parms = parameters)
+result <- data.frame(result)
+
+result <- mutate(result, BCR = dnorm(time, 21, 2) * 150 * (1 / ( 1 + BCL6 ^ 2))) %>%
+  mutate(CD40 = dnorm(time, 25, 2)* 150 * (1 / ( 1 + BCL6 ^ 2)))
+
+result <- result %>% 
+  gather(Factor, Value, -time)
+str(result)
+result$Factor <- factor(result$Factor, levels = c("BLIMP1", "BCL6", "IRF4", "BCR", "CD40"))
+str(result)
+# plot the results
+
+result %>% 
+  ggplot(aes(x=time, y= Value,fill = Factor, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  theme(panel.background = element_rect(fill = "white")) +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+    legend.title=element_text(size=14), 
+    legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position=c(0.8,0.6), legend.title = element_blank(), axis.line = element_line(colour = "black"))+
+  labs(y = "Protein level", x= "time",cex=5) +
+  theme(axis.text=element_text(size=12), axis.title=element_text(size=14))
+```  
+
+As seen from the graph above, BCR signalling (indicated with the blue rectangle) causes a decrease in Bcl6 and subsequently a small increase of Blimp1, prepping the system for CD40 signalling (indicated by the red rectangle) and bringing the system over the tipping point to differentiation. IRF4 and BLIMP1 increase and BCL6 decreases and a new stable state is reached even after termination of BCR and CD40 signals.
+
+
+
+
+## Muto
+The model formulated by Muto et al. is shown below. The model involves 3 main transcription factors: Bach2 Pax5 and Blimp-1. Pax5 and Blimp-1 have a mutual respression and Bach is hypothesized to act as a regulator.
+![Could not display image](muto.png)
+
+Equation 1  
+$$
+  \frac{d[Pax5]}{dt}=\frac{C_1}{1+C_2[Blimp\text{-}1]^{n_s}} + e_0-[Pax5]
+$$  
+Equation 2
+$$
+  \frac{\mathrm{d}[Bach2]}{\mathrm{d}t}=\left[\frac{C_3}{1+C_4[Blimp\text{-}1]^{n_\text{s'}}}\right]\left[\frac{a_1[Pax5]}{1+b_1[Pax5]^{n_r}} + e_1 \right] - [Bach2]
+$$  
+Equation 3
+$$
+  [Blimp\text{-}1] = c/[Bach2]
+$$
+```{r}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("tidyr")
+library("directlabels")
+
+Muto1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  PAX5 <- y[1]
+  BACH2 <- y[2]
+  
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  a   <- parameters['a']
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  kx <- parameters['kx']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  kh <- parameters['kh']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  BLIMP1 <- parameters['BLIMP1']
+  
+  # calculate rate of change
+  dPAX5 <- C1 * (kx ^ ns / (kx ^ ns + BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- (C3 / (1 + C4* BLIMP1 ^ns_))*((a * 0.2 ^ nr / (kh^nr + 0.2 ^ nr)) + e1) - BACH2
+  
+  # return rate of change
+  return(list(c(dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  C1 = 0.1,
+  C2 = 2.441*10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  kx = 3.557,
+  C4 = 1,
+  ns_ = 12,
+  a1 = 3,
+  a = 1,
+  kh = 0.633,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2,
+  BLIMP1 = 2
+)
+
+state <- c(PAX5= 1, BACH2 = 1) # starting states
+initial_conditions <-  matrix(c(0, 0, 
+                                0.5, 0, 
+                                0, 0.5, 
+                                0.5, 0.5,
+                                0.2, 0.2), 
+                              ncol = 2,
+                              byrow = TRUE)
+
+times <- seq(0, 100, by = 0.01)
+
+BLIMP_vector = seq(0,5,0.1)
+BACH_vector= NULL
+PAX_vector= NULL
+for (BLIMP1 in BLIMP_vector){
+  
+  parameters["BLIMP1"] = BLIMP1
+  result <-
+    ode(
+      y = state,
+      times = times,
+      func = Muto1,
+      parms = parameters
+    )
+  result <- data.frame(result)
+  BACH_vector = append(BACH_vector, result$BACH2[9999])
+  PAX_vector = append(PAX_vector, result$PAX5[9999])
+}
+
+equilibrium_plot <-  data.frame(BLIMP_vector,BACH_vector,PAX_vector)
+
+equilibrium_plot %>% 
+  rename(BACH2=BACH_vector, PAX5=PAX_vector) %>% 
+  gather(Factor, Concentration, -BLIMP_vector) %>% 
+  ggplot(aes(x=BLIMP_vector, y=Concentration, color=Factor)) +
+  geom_line(aes(x=BLIMP_vector, y=Concentration), cex = 1) +
+  xlab("[Blimp-1]") +
+  ylab("Protein level") +
+  scale_color_brewer(palette = "Set1")+
+  theme(panel.background = element_rect(fill = "white"),
+    legend.position=c(0.8,0.7),
+    axis.text=element_text(size=12), 
+    legend.title=element_blank(),
+    axis.title=element_text(size=14),
+    legend.text=element_text(size=13),
+    axis.line = element_line(colour = "black"))+
+  scale_x_continuous(expand = c(0, 0))
+
+```  
+
+The graph above uses the model by Muto et al. to display differences of stable states in [Pax5] and [Bach2] with changes in [Blimp-1]. As can be seen in the graph, Bach2 decreases prior to Pax5 decrease. This phenomenom was found in in vitro cell cultures (Muto et al.). The study suggests that Bach kinetic regulate the onset of CSR as a timekeeper.Although if we analyze the model further we find that the repression of Bach2 by Blimp-1 is not supported by data, rising the question whether the model is valid.
+
+The model for bach: $\frac{\mathrm{d}[Bach2]}{\mathrm{d}t}=\left[\frac{C_3}{1+C_4[Blimp\text{-}1]^{n_\text{s'}}}\right]\left[\frac{a_1[Pax5]}{1+b_1[Pax5]^{n_r}} + e_1 \right] - [Bach2]$ has a repression by Blimp1 in the first term of the righthand side of the equation. Muto et al. clearly state that repression by Blimp1 is not the case.
+If we were to change the equation to the follwoing without Blimp1 suppression: $\frac{\mathrm{d}[Bach2]}{\mathrm{d}t}=\left[\frac{a_1[Pax5]}{1+b_1[Pax5]^{n_r}} + e_1 \right] - [Bach2]$ we can again plot the changes of Pax and Bach with Blimp.
+
+```{r} 
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("tidyr")
+
+Muto1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  PAX5 <- y[1]
+  BACH2 <- y[2]
+  
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  BLIMP1 <- parameters['BLIMP1']
+  
+  # calculate rate of change
+  dPAX5 <- (C1 / (1 + C2 * BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- ((a1 * PAX5 ^ nr / (1 + b1 * PAX5 ^ nr)) + e1) - BACH2
+  
+  # return rate of change
+  return(list(c(dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  C1 = 0.1,
+  C2 = 2.441*10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  C4 = 1,
+  ns_ = 12,
+  a1 = 3,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2,
+  BLIMP1 = 2
+)
+
+state <- c(PAX5= 1, BACH2 = 1) # starting states
+initial_conditions <-  matrix(c(0, 0, 
+                                0.5, 0, 
+                                0, 0.5, 
+                                0.5, 0.5,
+                                0.2, 0.2), 
+                              ncol = 2,
+                              byrow = TRUE)
+
+times <- seq(0, 100, by = 0.01)
+
+BLIMP_vector = seq(0,5,0.1)
+BACH_vector= NULL
+PAX_vector= NULL
+for (BLIMP1 in BLIMP_vector){
+  
+  parameters["BLIMP1"] = BLIMP1
+  result <-
+    ode(
+      y = state,
+      times = times,
+      func = Muto1,
+      parms = parameters
+    )
+  result <- data.frame(result)
+  BACH_vector = append(BACH_vector, result$BACH2[9999])
+  PAX_vector = append(PAX_vector, result$PAX5[9999])
+}
+
+equilibrium_plot <-  data.frame(BLIMP_vector,BACH_vector,PAX_vector)
+
+equilibrium_plot %>% 
+  rename(BACH2=BACH_vector, PAX5=PAX_vector) %>% 
+  gather(Factor, Concentration, -BLIMP_vector) %>% 
+  ggplot(aes(x=BLIMP_vector, y=Concentration, color=Factor)) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "[Blimp-1]",cex=5) +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(), 
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"), 
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white")) +
+  geom_line(aes(x=BLIMP_vector, y=Concentration), cex = 1)
+```
+
+
+The model without Blimp-1 repression does not display a diference in the onset of Bach and Pax repression. Which is actually expected because Bach2 cannot change without Pax5 changing.
+
+##Martinez + Muto
+
+Equation 1  
+$$
+  \frac{d[Pax5]}{dt}=\frac{C_1}{1+C_2[Blimp\text{-}1]^{n_s}} + e_0-[Pax5]
+$$  
+Equation 2
+$$
+  \frac{\mathrm{d}[Bach2]}{\mathrm{d}t}=\left[\frac{C_3}{1+C_4[Blimp\text{-}1]^{n_\text{s'}}}\right]\left[\frac{a_1[Pax5]}{1+b_1[Pax5]^{n_r}} + e_1 \right] - [Bach2]
+$$  
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("grid")
+library("tidyr")
+library("directlabels")
+
+Roman1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  BLIMP1 <- y[1]
+  BCL6 <- y[2]
+  IRF4 <- y[3]
+  PAX5 <- y[4]
+  BACH2 <-y[5]
+  
+  up <- parameters['up']    # passive transcription rate
+  ub <- parameters['ub']
+  ur <- parameters['ur']
+  
+  
+  op <- parameters['op']    # max induced transcription rate
+  ob <- parameters['ob']
+  or <- parameters['or']
+  
+  kb <- parameters['kb']    # dissociation constant
+  kr <- parameters['kr']
+  kp <- parameters['kp']
+  
+  ep <- parameters['ep']    # rate of degradation
+  eb <- parameters['eb']
+  er <- parameters['er']
+  
+  # Muto parameters
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  
+  
+  CD40 <-2 * dnorm(t, 25, 2) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2))
+  BCR <- 20 * dnorm(t, 21, 2) * (kb ^ 2 / ( kb ^ 2 + BCL6 ^ 2))
+  
+  # calculate rate of change
+  dBLIMP1 <- up + op * (kb ^ 2 / (kb ^ 2 + BACH2 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) + op * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - ep * BLIMP1
+  dBCL6 <- ub + ob * (kp ^ 2 / (kp ^ 2 + BLIMP1 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) * (kr ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - (eb + BCR) * BCL6
+  dIRF4 <- ur + or * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) + CD40 - er * IRF4
+  dPAX5 <- (C1 / (1 + C2 * BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- (C3 / (1 + C4* BLIMP1 ^ns_))*((a1 * PAX5 ^ nr / (1 + b1 * PAX5 ^ nr)) + e1) - BACH2
+  
+  
+  # return rate of change
+  return(list(c(dBLIMP1, dBCL6, dIRF4, dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  up = 10 ^ -6,
+  ub = 2,
+  ur = 0.1,
+  op = 9,
+  ob = 100,       #just some parameters, no bxiggie
+  or = 2.6,
+  kp = 1,
+  kb = 1,
+  kr = 1,
+  ep = 1,
+  eb = 1,
+  er = 1,
+  BCR = 0,
+  CD40 = 0,
+  C1 = 0.1,
+  C2 = 2* 10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  C4 = 1,
+  ns_ = 2.8,
+  a1 = 3,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2
+)
+
+state <- c(BLIMP1 = 0.747, BCL6 = 4.7, IRF4 = 0.2, PAX5 = 0.2, BACH2 = 0.182) # starting states
+
+times <- seq(0, 50, by = 0.01)
+
+result <- ode(y=state, times = times, func = Roman1, parms = parameters)
+result <- data.frame(result)
+
+
+# plot the results
+
+ result <- result %>%
+  gather(Factor, Value, -time)
+ str(result)
+ result$Factor <- factor(result$Factor, levels = c("BLIMP1", "BCL6", "IRF4", "BACH2", "PAX5"))
+ str(result)
+result %>%
+  ggplot(aes(x = time, y = Value, fill = Factor, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1") +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = "Protein level", x= "time") +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(colour = "black"),
+        legend.text=element_text(size=13))
+
+result <- result %>%
+  filter(Factor == "BACH2" | Factor == "PAX5")
+
+
+result %>%
+  ggplot(aes(x = time, y = Value,fill = Factor, color = Factor)) +
+  scale_color_brewer(palette = "Set1") +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  labs(y = "Protein level", x= "time") +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(),
+        axis.text=element_text(size=12),
+        panel.background = element_rect(fill = "white"),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"),
+        legend.text=element_text(size=13))
+```
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("grid")
+library("tidyr")
+library("directlabels")
+
+Roman1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  BLIMP1 <- y[1]
+  BCL6 <- y[2]
+  IRF4 <- y[3]
+  PAX5 <- y[4]
+  BACH2 <-y[5]
+  
+  up <- parameters['up']    # passive transcription rate
+  ub <- parameters['ub']
+  ur <- parameters['ur']
+  
+  
+  op <- parameters['op']    # max induced transcription rate
+  ob <- parameters['ob']
+  or <- parameters['or']
+  
+  kb <- parameters['kb']    # dissociation constant
+  kr <- parameters['kr']
+  kp <- parameters['kp']
+  
+  ep <- parameters['ep']    # rate of degradation
+  eb <- parameters['eb']
+  er <- parameters['er']
+  
+  # Muto parameters
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  
+  
+  CD40 <-2 * dnorm(t, 25, 2) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2))
+  BCR <- 20 * dnorm(t, 21, 2) * (kb ^ 2 / ( kb ^ 2 + BCL6 ^ 2))
+  
+  # calculate rate of change
+  dBLIMP1 <- up + op * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) + op * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - ep * BLIMP1
+  dBCL6 <- ub + ob * (kp ^ 2 / (kp ^ 2 + BLIMP1 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) * (kr ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - (eb + BCR) * BCL6
+  dIRF4 <- ur + or * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) + CD40 - er * IRF4
+  dPAX5 <- (C1 / (1 + C2 * BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- ((a1 * PAX5 ^ nr / (1 + b1 * PAX5 ^ nr)) + e1) - BACH2
+  
+  
+  # return rate of change
+  return(list(c(dBLIMP1, dBCL6, dIRF4, dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  up = 10 ^ -6,
+  ub = 2,
+  ur = 0.1,
+  op = 9,
+  ob = 100,       #just some parameters, no bxiggie
+  or = 2.6,
+  kp = 1,
+  kb = 1,
+  kr = 1,
+  ep = 1,
+  eb = 1,
+  er = 1,
+  BCR = 0,
+  CD40 = 0,
+  C1 = 0.1,
+  C2 = 2* 10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  C4 = 1,
+  ns_ = 2.8,
+  a1 = 3,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2
+)
+
+state <- c(BLIMP1 = 0.747, BCL6 = 4.7, IRF4 = 0.2, PAX5 = 0.2, BACH2 = 0.26) # starting states
+
+times <- seq(0, 50, by = 0.01)
+
+result <- ode(y=state, times = times, func = Roman1, parms = parameters)
+result <- data.frame(result)
+
+result <- mutate(result, BCR = dnorm(time, 20, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2))) %>%
+  mutate(CD40 = dnorm(time, 30, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2)))
+
+
+# plot the results
+
+ result <- result %>%
+  gather(Factor, Value, -time) %>% 
+   filter(Factor != "BCR" & Factor != "CD40")
+ 
+  result$Factor <- factor(result$Factor, levels = c("BLIMP1", "BCL6", "IRF4", "BACH2", "PAX5"))
+ 
+result %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "time",cex=5) +
+  theme(legend.position=c(0.8,0.6),
+        legend.title = element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"),
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white"))
+
+
+result <- result %>%
+  filter(Factor == "PAX5" | Factor == "BACH2")
+
+
+result %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "time") +
+  theme(legend.position=c(0.8,0.55),
+        legend.title = element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"),
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white")) 
+```
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("grid")
+library("tidyr")
+library("directlabels")
+
+Roman1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  BLIMP1 <- y[1]
+  BCL6 <- y[2]
+  IRF4 <- y[3]
+  PAX5 <- y[4]
+  BACH2 <-y[5]
+  
+  up <- parameters['up']    # passive transcription rate
+  ub <- parameters['ub']
+  ur <- parameters['ur']
+  
+  
+  op <- parameters['op']    # max induced transcription rate
+  ob <- parameters['ob']
+  or <- parameters['or']
+  
+  kb <- parameters['kb']    # dissociation constant
+  kr <- parameters['kr']
+  kp <- parameters['kp']
+  
+  ep <- parameters['ep']    # rate of degradation
+  eb <- parameters['eb']
+  er <- parameters['er']
+  
+  # Muto parameters
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  
+  
+  CD40 <- 2 * dnorm(t, 25, 2) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2))
+  BCR <- 20 * dnorm(t, 21, 2) * (kb ^ 2 / ( kb ^ 2 + BCL6 ^ 2))
+  
+  # calculate rate of change
+  dBLIMP1 <- up + op * (kb ^ 2 / (kb ^ 2 + (BACH2*BCL6) ^ 2)) + op * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - ep * BLIMP1
+  dBCL6 <- ub + ob * (kp ^ 2 / (kp ^ 2 + BLIMP1 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) * (kr ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - (eb + BCR) * BCL6
+  dIRF4 <- ur + or * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) + CD40 - er * IRF4
+  dPAX5 <- (C1 / (1 + C2 * BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- ((a1 * PAX5 ^ nr / (1 + b1 * PAX5 ^ nr)) + e1) - BACH2
+  
+  
+  # return rate of change
+  return(list(c(dBLIMP1, dBCL6, dIRF4, dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  up = 10 ^ -6,
+  ub = 2,
+  ur = 0.1,
+  op = 4,
+  ob = 100,       #just some parameters, no bxiggie
+  or = 2.6,
+  kp = 1,
+  kb = 1,
+  kr = 1,
+  ep = 1,
+  eb = 1,
+  er = 1,
+  BCR = 0,
+  CD40 = 0,
+  C1 = 0.1,
+  C2 = 2* 10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  C4 = 1,
+  ns_ = 2.8,
+  a1 = 3,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2
+)
+
+state <- c(BLIMP1 = 2.55, BCL6 = 3.16, IRF4 = 0.2, PAX5 = 0.2, BACH2 = 0.258) # starting states
+
+times <- seq(0, 50, by = 0.01)
+
+result <- ode(y=state, times = times, func = Roman1, parms = parameters)
+result <- data.frame(result)
+
+result <- mutate(result, BCR = dnorm(time, 20, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2))) %>%
+  mutate(CD40 = dnorm(time, 30, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2)))
+
+
+# plot the results
+
+ result <- result %>%
+  gather(Factor, Value, -time) %>% 
+   filter(Factor != "BCR" & Factor != "CD40")
+ 
+ result$Factor <- factor(result$Factor, levels = c("BLIMP1", "BCL6", "IRF4", "BACH2", "PAX5"))
+ 
+result %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "[Blimp-1]",cex=5) +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(), 
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"), 
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white"))
+
+results <- result %>%
+  filter(Factor == "BACH2" | Factor == "PAX5")
+
+
+results %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "time") +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(), 
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"), 
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white"))
+  
+```
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("deSolve")
+library("grid")
+library("tidyr")
+library("directlabels")
+
+Roman1 <- function(t, y, parameters) {
+  #calculates dx/dts for a GRN
+  
+  # t: time at which to evaluate derivatives
+  # y: vector of system variables (c(P,B,R))
+  # parameters: vector of model parameters
+  
+  BLIMP1 <- y[1]
+  BCL6 <- y[2]
+  IRF4 <- y[3]
+  PAX5 <- y[4]
+  BACH2 <-y[5]
+  
+  up <- parameters['up']    # passive transcription rate
+  ub <- parameters['ub']
+  ur <- parameters['ur']
+  
+  
+  op <- parameters['op']    # max induced transcription rate
+  ob <- parameters['ob']
+  or <- parameters['or']
+  
+  kb <- parameters['kb']    # dissociation constant
+  kr <- parameters['kr']
+  kp <- parameters['kp']
+  
+  ep <- parameters['ep']    # rate of degradation
+  eb <- parameters['eb']
+  er <- parameters['er']
+  
+  # Muto parameters
+  C1  <- parameters['C1']
+  C2  <- parameters['C2']
+  ns  <- parameters['ns']
+  e0  <- parameters['e0']
+  
+  C3  <- parameters['C3']
+  C4  <- parameters['C4']
+  ns_ <- parameters['ns_']
+  a1  <- parameters['a1']
+  nr  <- parameters['nr']
+  b1  <- parameters['b1']
+  e1  <- parameters['e1']
+  
+  
+  CD40 <- 2 * dnorm(t, 25, 2) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2))
+  BCR <- 20 * dnorm(t, 21, 2) * (kb ^ 2 / ( kb ^ 2 + BCL6 ^ 2))
+  
+  # calculate rate of change
+  dBLIMP1 <- up + op * (kb ^ 2 / (kb ^ 2 + BACH2 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) + op * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - ep * BLIMP1
+  dBCL6 <- ub + ob * (kp ^ 2 / (kp ^ 2 + BLIMP1 ^ 2)) * (kb ^ 2 / (kb ^ 2 + BCL6 ^ 2)) * (kr ^ 2 / (kr ^ 2 + IRF4 ^ 2)) - (eb + BCR) * BCL6
+  dIRF4 <- ur + or * (IRF4 ^ 2 / (kr ^ 2 + IRF4 ^ 2)) + CD40 - er * IRF4
+  dPAX5 <- (C1 / (1 + C2 * BLIMP1 ^ ns)) + e0 - PAX5
+  dBACH2 <- ((a1 * PAX5 ^ nr / (1 + b1 * PAX5 ^ nr)) + e1) - BACH2
+  
+  
+  # return rate of change
+  return(list(c(dBLIMP1, dBCL6, dIRF4, dPAX5, dBACH2)))
+}
+
+# run the numerical solution
+
+parameters = c(
+  up = 10 ^ -6,
+  ub = 2,
+  ur = 0.1,
+  op = 9,
+  ob = 100,       #just some parameters, no bxiggie
+  or = 2.6,
+  kp = 1,
+  kb = 1,
+  kr = 1,
+  ep = 1,
+  eb = 1,
+  er = 1,
+  BCR = 0,
+  CD40 = 0,
+  C1 = 0.1,
+  C2 = 2* 10^-7,
+  ns = 12,
+  e0 = 0.1,
+  C3 = 1,
+  C4 = 1,
+  ns_ = 2.8,
+  a1 = 3,
+  nr = 2.4,
+  b1 = 3,
+  e1 = 0.2
+)
+
+state <- c(BLIMP1 = 0.7, BCL6 = 4.74, IRF4 = 0.2, PAX5 = 0.2, BACH2 = 0.259) # starting states
+
+times <- seq(0, 100, by = 0.01)
+
+result <- ode(y=state, times = times, func = Roman1, parms = parameters)
+result <- data.frame(result)
+
+result <- mutate(result, BCR = dnorm(time, 20, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2))) %>%
+  mutate(CD40 = dnorm(time, 30, 2) * 20 * (1 ^ 2 / (1 ^ 2 + BCL6 ^ 2)))
+
+
+# plot the results
+
+ result <- result %>%
+  gather(Factor, Value, -time) %>% 
+   filter(Factor != "BCR" & Factor != "CD40")
+   #filter(Factor == "PAX5" | Factor == "BACH2")
+ 
+ result$Factor <- factor(result$Factor, levels = c("BLIMP1", "BCL6", "IRF4", "BACH2", "PAX5"))
+ 
+result %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "[Blimp-1]",cex=5) +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(), 
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"), 
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white"))
+
+results <- result %>%
+  filter(Factor == "PAX5" | Factor == "BACH2")
+
+
+results %>%
+  ggplot(aes(x = time, y = Value, color = Factor)) +
+  geom_line(aes(x = time, y = Value), cex = 1) +
+  scale_color_brewer(palette = "Set1")+
+  labs(y = "Protein level", x= "[Blimp-1]",cex=5) +
+  theme(legend.position=c(0.8,0.6), 
+        legend.title = element_blank(), 
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.line = element_line(colour = "black"), 
+        legend.text=element_text(size=13))+
+  scale_x_continuous(expand = c(0, 0)) +
+  theme(panel.background = element_rect(fill = "white"))
+```
+
